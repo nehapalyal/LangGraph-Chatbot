@@ -1,5 +1,5 @@
 import streamlit as st
-from backend import validate_user, add_user
+from backend.core import validate_user, add_user
 
 st.title("🔑 Login to My Chatbot")
 
