@@ -113,7 +113,6 @@ def save_message(thread_id, role, content):
     else:
         messages.append(AIMessage(content=content))
 
-    # ✅ Correct usage of update_state
     chatbot.update_state(
         values={'messages': messages},
         config={'configurable': {'thread_id': thread_id}}
