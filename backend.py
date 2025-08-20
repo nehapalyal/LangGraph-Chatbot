@@ -1,18 +1,17 @@
 import sqlite3
 import hashlib
 from dotenv import load_dotenv
-from langgraph.graph import StateGraph, START, END, add_messages
-from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 load_dotenv()
 
-# ---------------- Database ----------------
 DB_PATH = "langgraphChatbot.db"
 
+# ---------------- Database ----------------
 def init_db():
-    """Create required tables"""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         # Users table
@@ -23,20 +22,28 @@ def init_db():
                 password TEXT NOT NULL
             )
         """)
-        # Threads table
+        # Threads table with username column
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS threads (
                 thread_id TEXT PRIMARY KEY,
-                name TEXT
+                name TEXT,
+                username TEXT NOT NULL,
+                FOREIGN KEY(username) REFERENCES users(username)
             )
         """)
         conn.commit()
+
+# with sqlite3.connect(DB_PATH) as conn:
+#     cursor = conn.cursor()
+#     cursor.execute("DROP TABLE IF EXISTS threads")
+#     conn.commit()
+
+# init_db()
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def add_user(username: str, password: str):
-    """Add a new user (hashed password)"""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -46,20 +53,15 @@ def add_user(username: str, password: str):
         conn.commit()
 
 def validate_user(username: str, password: str) -> bool:
-    """Check login credentials"""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT password FROM users WHERE username=?", (username.strip(),))
         row = cursor.fetchone()
-        if row is None:
-            return False
-        return row[0] == hash_password(password.strip())
+        return row is not None and row[0] == hash_password(password.strip())
 
 # ---------------- Chatbot ----------------
-# Initialize LLM
 llm = ChatGoogleGenerativeAI(model='gemini-2.0-flash')
 
-# Define Chat State
 class ChatState(dict):
     messages: list[BaseMessage]
 
@@ -68,7 +70,6 @@ def chat_node(state: ChatState):
     response = llm.invoke(messages)
     return {'messages': [response]}
 
-# LangGraph setup
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 checkpointer = SqliteSaver(conn)
 checkpointer.setup()
@@ -79,7 +80,7 @@ graph.add_edge(START, 'chat_node')
 graph.add_edge('chat_node', END)
 chatbot = graph.compile(checkpointer=checkpointer)
 
-# Threads utilities
+# ---------------- Threads ----------------
 def retrieve_all_threads():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -87,8 +88,45 @@ def retrieve_all_threads():
         rows = cursor.fetchall()
         return [{"thread_id": r[0], "name": r[1]} for r in rows]
 
+def retrieve_user_threads(username):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT thread_id, name FROM threads WHERE username=?", (username,))
+        rows = cursor.fetchall()
+        return [{"thread_id": r[0], "name": r[1]} for r in rows]
+
+
 def update_thread_name(thread_id: str, new_name: str):
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE threads SET name=? WHERE thread_id=?", (new_name, thread_id))
         conn.commit()
+
+# ---------------- Messages ----------------
+def save_message(thread_id, role, content):
+    """Persist messages in LangGraph state"""
+    state_snapshot = chatbot.get_state(config={'configurable': {'thread_id': thread_id}})
+    messages = getattr(state_snapshot, 'values', {}).get('messages', []) if state_snapshot else []
+
+    if role == 'user':
+        messages.append(HumanMessage(content=content))
+    else:
+        messages.append(AIMessage(content=content))
+
+    # ✅ Correct usage of update_state
+    chatbot.update_state(
+        values={'messages': messages},
+        config={'configurable': {'thread_id': thread_id}}
+    )
+
+def load_conversation(thread_id):
+    state_snapshot = chatbot.get_state(config={'configurable': {'thread_id': thread_id}})
+    messages = getattr(state_snapshot, 'values', {}).get('messages', []) if state_snapshot else []
+
+    result = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            result.append({'role': 'user', 'content': msg.content})
+        elif isinstance(msg, AIMessage):
+            result.append({'role': 'assistant', 'content': msg.content})
+    return result
