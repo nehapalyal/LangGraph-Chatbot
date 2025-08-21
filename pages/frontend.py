@@ -55,7 +55,12 @@ threads = retrieve_user_threads(st.session_state['username'])
 st.session_state['chat_threads'] = {t["thread_id"]: t["name"] for t in threads} if threads else {}
 
 # ---------------- SIDEBAR ----------------
-st.title(f"Langgraph Chatbot - {st.session_state['username']}")
+st.markdown(
+    "<h1 style='text-align: center;'>LangGraph Chatbot</h1>",
+    unsafe_allow_html=True
+)
+
+st.sidebar.title(st.session_state['username'])
 
 # Logout
 if st.sidebar.button("Logout"):
