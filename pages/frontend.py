@@ -60,7 +60,7 @@ st.sidebar.title(f"Langgraph Chatbot - {st.session_state['username']}")
 # Logout
 if st.sidebar.button("Logout"):
     st.session_state.clear()
-    st.switch_page("/Users/nehapalyal/Desktop/Langgraph chatbot/Login.py")
+    st.switch_page("Login.py")
 
 # New Chat button
 if st.sidebar.button("New Chat"):
