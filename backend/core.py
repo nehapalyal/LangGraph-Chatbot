@@ -22,7 +22,7 @@ def init_db():
                 password TEXT NOT NULL
             )
         """)
-        # Threads table with username column
+        # Threads table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS threads (
                 thread_id TEXT PRIMARY KEY,
@@ -31,7 +31,19 @@ def init_db():
                 FOREIGN KEY(username) REFERENCES users(username)
             )
         """)
+        # Messages table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(thread_id) REFERENCES threads(thread_id)
+            )
+        """)
         conn.commit()
+
 
 # with sqlite3.connect(DB_PATH) as conn:
 #     cursor = conn.cursor()
@@ -94,17 +106,32 @@ def retrieve_user_threads(username):
         cursor.execute("SELECT thread_id, name FROM threads WHERE username=?", (username,))
         rows = cursor.fetchall()
         return [{"thread_id": r[0], "name": r[1]} for r in rows]
-
+    
+def add_thread(thread_id, name, username):
+    """Add new thread to DB"""
+    import sqlite3
+    from backend.core import DB_PATH
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO threads (thread_id, name, username) VALUES (?, ?, ?)",
+            (thread_id, name, username)
+        )
+        conn.commit()
 
 def update_thread_name(thread_id: str, new_name: str):
+    """Update thread name in DB"""
+    import sqlite3
+    from backend.core import DB_PATH
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE threads SET name=? WHERE thread_id=?", (new_name, thread_id))
         conn.commit()
 
+
 # ---------------- Messages ----------------
 def save_message(thread_id, role, content):
-    """Persist messages in LangGraph state"""
+    # Save in LangGraph
     state_snapshot = chatbot.get_state(config={'configurable': {'thread_id': thread_id}})
     messages = getattr(state_snapshot, 'values', {}).get('messages', []) if state_snapshot else []
 
@@ -118,14 +145,26 @@ def save_message(thread_id, role, content):
         config={'configurable': {'thread_id': thread_id}}
     )
 
-def load_conversation(thread_id):
-    state_snapshot = chatbot.get_state(config={'configurable': {'thread_id': thread_id}})
-    messages = getattr(state_snapshot, 'values', {}).get('messages', []) if state_snapshot else []
+    # Save in DB
+    import sqlite3
+    from backend.core import DB_PATH
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO messages (thread_id, role, content) VALUES (?, ?, ?)",
+            (thread_id, role, content)
+        )
+        conn.commit()
 
-    result = []
-    for msg in messages:
-        if isinstance(msg, HumanMessage):
-            result.append({'role': 'user', 'content': msg.content})
-        elif isinstance(msg, AIMessage):
-            result.append({'role': 'assistant', 'content': msg.content})
-    return result
+
+def load_conversation(thread_id):
+    import sqlite3
+    from backend.core import DB_PATH
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT role, content FROM messages WHERE thread_id=? ORDER BY id ASC",
+            (thread_id,)
+        )
+        rows = cursor.fetchall()
+    return [{'role': r[0], 'content': r[1]} for r in rows]

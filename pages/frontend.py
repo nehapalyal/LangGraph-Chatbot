@@ -1,38 +1,35 @@
 import streamlit as st
 from backend.core import (
     chatbot, save_message, load_conversation, DB_PATH,
-    retrieve_user_threads
+    retrieve_user_threads, add_thread, update_thread_name
 )
 from langchain_core.messages import HumanMessage, AIMessage
-import uuid, sqlite3
+import uuid
 
 # ---------------- Helpers ----------------
 def generate_thread_id():
     return str(uuid.uuid4())
 
-def reset_chat():
-    st.session_state['thread_id'] = generate_thread_id()
-    st.session_state['message_history'] = []
-    st.session_state['new_chat'] = True
-
 def reset_session(username):
+    """Initialize session for logged-in user"""
     st.session_state['username'] = username
     st.session_state['authenticated'] = True
-    st.session_state['thread_id'] = generate_thread_id()
-    st.session_state['message_history'] = []
-    st.session_state['new_chat'] = True
+
+    # Load all threads from DB
     threads = retrieve_user_threads(username)
     st.session_state['chat_threads'] = {t["thread_id"]: t["name"] for t in threads} if threads else {}
 
-def add_thread(thread_id, name, username):
-    st.session_state['chat_threads'][thread_id] = name
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO threads (thread_id, name, username) VALUES (?, ?, ?)",
-            (thread_id, name, username)
-        )
-        conn.commit()
+    # Load last thread or create new
+    if threads:
+        last_thread = threads[-1]["thread_id"]
+        st.session_state['thread_id'] = last_thread
+        st.session_state['message_history'] = load_conversation(last_thread)
+        st.session_state['new_chat'] = False
+    else:
+        new_id = generate_thread_id()
+        st.session_state['thread_id'] = new_id
+        st.session_state['message_history'] = []
+        st.session_state['new_chat'] = True
 
 # ---------------- Session Initialization ----------------
 for key in ["authenticated", "username", "thread_id", "message_history", "new_chat", "chat_threads"]:
@@ -49,49 +46,41 @@ for key in ["authenticated", "username", "thread_id", "message_history", "new_ch
             st.session_state[key] = False if key=="authenticated" else ""
 
 # ---------------- LOGIN CHECK ----------------
-if not st.session_state["authenticated"]:
-    import Login  # or your login UI function
-    st.stop()  # stop so chatbot UI doesn’t load
+if not st.session_state.get('authenticated', False):
+    import Login
+    st.stop()
 
-# ---------------- LOAD USER THREADS ----------------
-# Add your snippet here
+# Ensure all threads are loaded
 threads = retrieve_user_threads(st.session_state['username'])
-if threads:
-    # Set the first thread as active
-    st.session_state['chat_threads'] = {t["thread_id"]: t["name"] for t in threads}
-    st.session_state['thread_id'] = threads[0]["thread_id"]
-    st.session_state['message_history'] = load_conversation(st.session_state['thread_id'])
-    st.session_state['new_chat'] = False
-else:
-    # No threads, start a new one
-    st.session_state['thread_id'] = generate_thread_id()
-    st.session_state['message_history'] = []
-    st.session_state['new_chat'] = True
+st.session_state['chat_threads'] = {t["thread_id"]: t["name"] for t in threads} if threads else {}
 
+# ---------------- SIDEBAR ----------------
+st.sidebar.title(f"Langgraph Chatbot - {st.session_state['username']}")
 
-# ---------------- CHATBOT UI ----------------
-st.sidebar.title(f"Langgraph Chatbot - {st.session_state.get('username','User')}")
-
+# Logout
 if st.sidebar.button("Logout"):
     st.session_state.clear()
-    st.switch_page("/Users/nehapalyal/Desktop/Langgraph chatbot/Login.py")  # Safe to use here after clearing session
+    st.switch_page("/Users/nehapalyal/Desktop/Langgraph chatbot/Login.py")
 
+# New Chat button
 if st.sidebar.button("New Chat"):
-    st.session_state['thread_id'] = generate_thread_id()
+    new_id = generate_thread_id()
+    st.session_state['thread_id'] = new_id
     st.session_state['message_history'] = []
     st.session_state['new_chat'] = True
+    st.rerun()  # 🔑 force UI refresh to show clean chat
 
-
-# Load threads for sidebar
+# My Conversations
 st.sidebar.header("My Conversations")
 for thread_id, name in reversed(list(st.session_state['chat_threads'].items())):
-    if st.sidebar.button(name, key=f"btn_thread_{thread_id}"):
+    display_name = name if name else "Untitled Chat"
+    if st.sidebar.button(display_name, key=f"btn_thread_{thread_id}"):
         st.session_state['thread_id'] = thread_id
         st.session_state['message_history'] = load_conversation(thread_id)
         st.session_state['new_chat'] = False
+        st.rerun()  # 🔑 reload chat window with selected history
 
-
-# Display chat history
+# ---------------- CHAT WINDOW ----------------
 for message in st.session_state['message_history']:
     with st.chat_message(message['role']):
         st.markdown(message['content'])
@@ -99,13 +88,16 @@ for message in st.session_state['message_history']:
 # User input
 user_input = st.chat_input("Type here...")
 if user_input:
+    # On first message of new chat, set thread name & save to DB
     if st.session_state['new_chat']:
-        add_thread(st.session_state['thread_id'], user_input[:30], st.session_state['username'])
+        thread_name = user_input[:30]  # first 30 chars as title
+        add_thread(st.session_state['thread_id'], thread_name, st.session_state['username'])
+        st.session_state['chat_threads'][st.session_state['thread_id']] = thread_name
         st.session_state['new_chat'] = False
 
+    # Append user message
     st.session_state['message_history'].append({'role': 'user', 'content': user_input})
     save_message(st.session_state['thread_id'], 'user', user_input)
-
     with st.chat_message('user'):
         st.markdown(user_input)
 
